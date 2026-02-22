@@ -1,0 +1,41 @@
+{
+  "name": "devteam",
+  "owner": {
+    "name": "Dev Team"
+  },
+  "metadata": {
+    "description": "A suite of Claude Code plugins providing a virtual development team covering the full software development lifecycle."
+  },
+  "plugins": [
+    {
+      "name": "devteam-workflow",
+      "source": "./devteam-workflow",
+      "description": "Pipeline orchestration: requirements elicitation, task plans, and session context management"
+    },
+    {
+      "name": "devteam-architect",
+      "source": "./devteam-architect",
+      "description": "Design sessions, ADRs, and independent design critique via a forked expert architect agent"
+    },
+    {
+      "name": "devteam-researcher",
+      "source": "./devteam-researcher",
+      "description": "API research, library validation, and codebase exploration using isolated Explore agents"
+    },
+    {
+      "name": "devteam-implementer",
+      "source": "./devteam-implementer",
+      "description": "Standards-enforcing implementation with mandatory requirements and pattern checks before any code is written"
+    },
+    {
+      "name": "devteam-tester",
+      "source": "./devteam-tester",
+      "description": "Test generation, isolated test execution, and coverage analysis"
+    },
+    {
+      "name": "devteam-reviewer",
+      "source": "./devteam-reviewer",
+      "description": "Code review, security review, and requirements conformance check via independent opus agents"
+    }
+  ]
+}

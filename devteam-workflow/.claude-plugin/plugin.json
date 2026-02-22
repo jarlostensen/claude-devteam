@@ -1,0 +1,8 @@
+{
+  "name": "devteam-workflow",
+  "version": "0.1.0",
+  "description": "Pipeline orchestration: requirements elicitation, task plans, and session context management",
+  "author": {
+    "name": "Dev Team"
+  }
+}

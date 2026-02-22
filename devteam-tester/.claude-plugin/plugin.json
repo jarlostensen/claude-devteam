@@ -1,0 +1,8 @@
+{
+  "name": "devteam-tester",
+  "version": "0.1.0",
+  "description": "Test generation, isolated test execution, and coverage analysis",
+  "author": {
+    "name": "Dev Team"
+  }
+}

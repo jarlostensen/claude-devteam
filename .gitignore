@@ -1,0 +1,23 @@
+# Claude Code — local-only files
+# settings.local.json holds machine-specific Claude Code configuration
+.claude/settings.local.json
+
+# Agent memory (memory: local) — each developer builds their own
+# Covers: architect-reviewer, code-reviewer, security-reviewer
+.claude/agent-memory-local/
+
+# Claude Code session transcripts and cache
+.claude/projects/
+.claude/todos/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

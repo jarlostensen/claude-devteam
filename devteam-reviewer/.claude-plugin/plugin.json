@@ -1,0 +1,8 @@
+{
+  "name": "devteam-reviewer",
+  "version": "0.1.0",
+  "description": "Code review, security review, and requirements conformance check via independent opus agents",
+  "author": {
+    "name": "Dev Team"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "devteam-researcher",
+  "version": "0.1.0",
+  "description": "API research, library validation, and codebase exploration using isolated forked agents",
+  "author": {
+    "name": "Dev Team"
+  }
+}

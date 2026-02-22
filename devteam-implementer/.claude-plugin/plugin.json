@@ -1,0 +1,8 @@
+{
+  "name": "devteam-implementer",
+  "version": "0.1.0",
+  "description": "Standards-enforcing implementation: reads requirements and design decisions before writing any code",
+  "author": {
+    "name": "Dev Team"
+  }
+}
