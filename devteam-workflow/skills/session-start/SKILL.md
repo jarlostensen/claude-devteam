@@ -1,8 +1,7 @@
 ---
 name: session-start
-description: Load project context at the start of a working session. Reads requirements, task plan, and recent ADRs, then provides a concise briefing. Use at the beginning of each session before doing any work.
+description: Load project context at the start of a working session. Reads requirements, task plan, recent ADRs, and git state, then provides a concise briefing. Use at the beginning of each session before doing any work.
 disable-model-invocation: true
-allowed-tools: Read, Glob, Bash(git log *)
 ---
 
 # Session Start
@@ -28,9 +27,22 @@ List files in `docs/adr/`. Read the most recent 3 (highest numbered). For each, 
 - The decision made (one sentence)
 - The status (proposed / accepted / deprecated / superseded)
 
-## Step 4 — Recent git activity
+## Step 4 — Git state
 
-Run `git log --oneline -10` if git is available. Capture the last few commit messages.
+Run each of the following if git is available:
+
+```
+git branch --show-current
+git status --short
+git log --oneline -5
+```
+
+Extract:
+- Current branch name
+- Whether the working tree is clean or has uncommitted changes (list changed files if any)
+- The last 5 commit messages
+
+If git is not available or the directory is not a repository, note "No git repository found."
 
 ## Step 5 — Produce a session briefing
 
@@ -49,9 +61,12 @@ Output the following. Be concise — this is a briefing, not a report.
 **Recent decisions**:
 - {ADR-NNNN}: {one-line summary} [{status}]
 
-**Recent commits**:
-- {commit message}
-- {commit message}
+**Repository**:
+- Branch: {branch name}
+- Working tree: {Clean | {N} uncommitted changes: {file list}}
+- Recent commits:
+  - {commit hash} {commit message}
+  - {commit hash} {commit message}
 
 Ready to proceed. What would you like to work on?
 ```

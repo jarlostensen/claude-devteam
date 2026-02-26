@@ -120,16 +120,16 @@ Forks an independent `architect-reviewer` agent (Claude Opus with web access) to
 ### 5. Research dependencies
 
 ```
-/devteam-researcher:api-research [library or API name]
-```
-
-Forks a research agent to verify current documentation, version status, licence, and integration complexity. Returns a structured suitability report.
-
-```
 /devteam-researcher:library-check [purpose] [lib1] [lib2] [lib3]
 ```
 
-Compares candidate libraries across standard criteria and produces a recommendation. Record the final choice with `/devteam-architect:adr`.
+Compares candidate libraries across a standard set of criteria including project consistency, licence, maintenance health, and feature fit. Produces a suitability matrix and summary — **you make the final selection**, taking team familiarity and preferences into account.
+
+```
+/devteam-researcher:api-research [chosen library] for [purpose]
+```
+
+Once a library is chosen, research its version lines. Presents current stable, LTS, and other available versions with their support windows, breaking change notes, and selection considerations — **you select the version**. The latest version is not always the right choice. Record both decisions with `/devteam-architect:adr`.
 
 ```
 /devteam-researcher:codebase-explore [area or topic]
@@ -220,8 +220,8 @@ Verifies the implementation satisfies the documented requirements and acceptance
 
 | Skill | Invocation | Description |
 |---|---|---|
-| `api-research` | `/devteam-researcher:api-research [name and use]` | Research an API or library before use |
-| `library-check` | `/devteam-researcher:library-check [purpose] [lib1] [lib2]` | Compare candidate libraries |
+| `api-research` | `/devteam-researcher:api-research [name and use]` | Research a library and present version options for user selection |
+| `library-check` | `/devteam-researcher:library-check [purpose] [lib1] [lib2]` | Compare candidate libraries; presents options — user makes the selection |
 | `codebase-explore` | `/devteam-researcher:codebase-explore [area]` | Map patterns and entry points in a codebase area |
 
 **Agent**: `researcher` — Claude Haiku with web access. Fast, cost-efficient; verifies claims against primary sources.
