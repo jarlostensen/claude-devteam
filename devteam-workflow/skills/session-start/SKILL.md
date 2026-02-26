@@ -71,7 +71,31 @@ Output the following. Be concise — this is a briefing, not a report.
 Ready to proceed. What would you like to work on?
 ```
 
-If neither `docs/requirements.md` nor `docs/task-plan.md` exists, respond:
+If neither `docs/requirements.md` nor `docs/task-plan.md` exists:
+
+Check whether this is an existing project (source files, a README, or a git history present) or a blank slate:
+
+**Existing project detected** — read `README.md` and run `git log --oneline -5` if available, then respond:
+
+```
+## Session Context
+
+No devteam project docs found, but this appears to be an existing project.
+
+**Project**: {name from README or package manifest}
+**Stack**: {inferred from package manifests or file extensions}
+**Recent commits**:
+- {commit message}
+- {commit message}
+
+To continue development with the devteam suite, run:
+  `/devteam-workflow:retrofit`
+
+This will analyse the existing code, derive requirements, capture existing
+architectural decisions as ADRs, and produce a task plan for remaining work.
+```
+
+**Blank project** — respond:
 
 ```
 No project context found. To get started:

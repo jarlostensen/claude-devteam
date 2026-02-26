@@ -71,6 +71,28 @@ To have teammates automatically prompted to install the marketplace when they op
 
 ---
 
+## Adopting the suite on an existing project
+
+If you have an existing codebase with prior design decisions, implementations, and history, use the `retrofit` skill to bring it under the devteam workflow rather than starting from scratch.
+
+```
+/devteam-workflow:retrofit
+```
+
+The skill analyses the project in five phases:
+
+1. **Project scan** — maps the codebase structure, stack, dependencies, git history, TODO comments, open GitHub issues, and skipped tests
+2. **Derive requirements** — infers functional and non-functional requirements from tests, the README, and the public API surface; presents them for your review and confirmation before writing
+3. **Capture existing decisions as ADRs** — identifies the major architectural choices already in effect (framework, database, auth mechanism, etc.) and creates retrospective MADR-format ADRs marked `accepted`
+4. **Draft the task plan** — consolidates remaining work from open issues, TODO comments, pending tests, and requirement gaps into a `docs/task-plan.md`
+5. **Summary** — reports what was produced and which devteam skills to use next
+
+After `retrofit` completes, the full suite is available:  `session-start`, `implement`, `code-review`, `design-session`, and all others work against the derived project docs.
+
+You can run `retrofit` on a partially-documented project too — it skips phases where docs already exist and only fills in what is missing.
+
+---
+
 ## Typical session workflow
 
 ### 1. Start every session
@@ -196,6 +218,7 @@ Verifies the implementation satisfies the documented requirements and acceptance
 | `session-start` | `/devteam-workflow:session-start` | Load requirements, task plan, and recent ADRs at session start |
 | `requirements` | `/devteam-workflow:requirements [topic]` | Elicit and document technology-agnostic requirements |
 | `plan` | `/devteam-workflow:plan` | Create or update the task plan from requirements |
+| `retrofit` | `/devteam-workflow:retrofit` | Analyse an existing codebase and produce requirements, ADRs, and a task plan |
 | `task-status` | *(model-invoked)* | Silent background check; flags when work drifts from the plan |
 
 **Project files managed**: `docs/requirements.md`, `docs/task-plan.md`

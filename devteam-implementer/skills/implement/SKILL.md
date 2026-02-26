@@ -19,7 +19,17 @@ Read:
 3. Any ADR in `docs/adr/` relevant to the area being implemented
 4. Any design document in `docs/design/` relevant to this task
 
-If `docs/requirements.md` or `docs/task-plan.md` do not exist, stop and tell the user to run `/devteam-workflow:requirements` and `/devteam-workflow:plan` first.
+If `docs/requirements.md` or `docs/task-plan.md` do not exist:
+
+- **Existing code is present**: suggest running `/devteam-workflow:retrofit` first to derive project docs from the existing codebase. Offer to continue anyway if the user provides an inline description of the task and the requirements it satisfies — note that without a formal plan, requirement tracing will be approximate.
+- **No code exists yet**: stop and tell the user to run `/devteam-workflow:requirements` and `/devteam-workflow:plan` first.
+
+If continuing without formal docs, ask the user for:
+1. A description of what needs to be implemented
+2. Which requirements or goals it satisfies (even informally stated)
+3. The test command to use for verification
+
+Use these answers in place of the plan for the remainder of the steps.
 
 ## Step 2 — Git: branch setup
 
