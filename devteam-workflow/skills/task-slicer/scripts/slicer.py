@@ -58,41 +58,50 @@ _IGNORED_DIRS = {
 
 _EXECUTOR_SYSTEM_PROMPT = """\
 You are a code implementation assistant. You will be given a specific, \
-scoped coding task to implement. Apply the changes described and return \
-the complete updated contents of every file you modify or create.
+scoped coding task to implement.
 
-## Output format for file changes
+## Your ONLY output: file contents
 
-For each file changed or created, use this exact format:
+Write the complete contents of every file you create or modify using \
+this exact format and nothing else outside it:
 
 === FILE: <relative/path/to/file> ===
 <complete file contents>
 === END FILE ===
 
-Do not include files that you did not change.
+Do NOT include files that are unchanged.
+Do NOT add explanation outside the FILE blocks — only file contents.
 
-## Tool use
+## IMPORTANT constraints
 
-If you need to read a file or list a directory that was not provided, \
-request it using a tool call in this format:
+- You CANNOT run shell commands. Do not call cargo, git, npm, or any CLI tool.
+- You CANNOT write or delete files directly. Output them in the FILE format above.
+- You CANNOT execute code. Write it; the human will run it.
+- If a file is new, write its full contents from scratch.
 
+## Two read-only tools (use only when a file you need was not provided)
+
+Request a file read:
 <tool_call>
 {"name": "read_file", "parameters": {"path": "relative/path/to/file"}}
 </tool_call>
 
+Request a directory listing:
 <tool_call>
 {"name": "list_directory", "parameters": {"path": "relative/directory/path"}}
 </tool_call>
 
-You may make multiple tool calls. Tool results will be returned and you \
-should continue implementing after receiving them.
+These are the ONLY two tools available. Any other tool name will return an \
+error. Do not retry a failed tool with different parameters — if a tool \
+returns an error, work around it using the information already provided.
 
 ## Rules
 
-- Make ONLY the changes described in the task. Do not refactor unrelated code.
-- Follow the existing code style and patterns shown in any provided file contents.
-- Satisfy all acceptance criteria listed in the task.
+- Make ONLY the changes described in the task.
+- Follow the existing code style in any provided file contents.
+- Satisfy all acceptance criteria.
 - Do not repeat a tool call that has already been answered.
+- Paths in FILE blocks must be relative to the project root.
 """
 
 
@@ -507,8 +516,12 @@ def _resolve_model_config(config: dict) -> dict:
               max_turns.
     """
     base = config.get("model", config)
+    endpoint = base.get("endpoint", "https://api.openai.com/v1/chat/completions")
+    # Accept both base URLs (ending in /v1) and full endpoint paths
+    if not endpoint.rstrip("/").endswith("/chat/completions"):
+        endpoint = endpoint.rstrip("/") + "/chat/completions"
     return {
-        "endpoint":   base.get("endpoint", "https://api.openai.com/v1/chat/completions"),
+        "endpoint":   endpoint,
         "api_key":    str(base.get("api_key", "")),
         "name":       str(base.get("name", "gpt-4o-mini")),
         "max_tokens": int(base.get("max_tokens", 4096)),
@@ -682,7 +695,12 @@ def _dispatch_tool(call: ToolCall, project_root: pathlib.Path) -> str:
         path = call.parameters.get("path", ".")
         return _tool_list_directory(path, project_root)
 
-    return f"ERROR: unknown tool '{call.name}'. Available: read_file, list_directory"
+    return (
+        f"ERROR: unknown tool '{call.name}'. "
+        "The ONLY available tools are 'read_file' and 'list_directory'. "
+        "Do NOT call this tool again. Output file contents using the "
+        "=== FILE: path === ... === END FILE === format instead."
+    )
 
 
 def _format_tool_results(calls: list[ToolCall], results: list[str]) -> str:
@@ -816,6 +834,8 @@ def _run_executor(
         {"role": "system", "content": system_prompt},
         {"role": "user",   "content": initial_message},
     ]
+    # Cache of (tool_name, frozen_params) -> result to short-circuit repeats
+    call_cache: dict[tuple, str] = {}
 
     for turn in range(1, max_turns + 1):
         response = _api_request(endpoint, api_key, model, messages, max_tokens)
@@ -838,15 +858,33 @@ def _run_executor(
             # Parser found patterns but could not extract valid calls
             return content
 
-        results = [_dispatch_tool(call, project_root) for call in calls]
-        tool_message = _format_tool_results(calls, results)
+        results: list[str] = []
+        for call in calls:
+            cache_key = (call.name, json.dumps(call.parameters, sort_keys=True))
+            if cache_key in call_cache:
+                cached = call_cache[cache_key]
+                print(
+                    f"[turn {turn}] duplicate call {call.name}({call.parameters}) "
+                    "— returning cached result",
+                    file=sys.stderr,
+                )
+                results.append(
+                    f"[DUPLICATE — already answered] {cached}\n"
+                    "This call was already made and answered. "
+                    "Do NOT call it again. Use the result above to continue."
+                )
+            else:
+                result = _dispatch_tool(call, project_root)
+                call_cache[cache_key] = result
+                results.append(result)
 
         print(
-            f"[turn {turn}] executed {len(calls)} tool call(s): "
+            f"[turn {turn}] {len(calls)} tool call(s): "
             + ", ".join(f"{c.name}({c.parameters})" for c in calls),
             file=sys.stderr,
         )
 
+        tool_message = _format_tool_results(calls, results)
         messages.append({"role": "user", "content": tool_message})
 
     _fatal(
