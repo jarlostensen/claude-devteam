@@ -11,12 +11,17 @@ Decompose this request into task slices: **$ARGUMENTS**
 
 ## Step 1 — Check prerequisites
 
-Config file: !`[ -f ".claude/planner_config.toml" ] && echo "FOUND: .claude/planner_config.toml" || echo "MISSING"`
+Config file: !`python -c "import pathlib; p=pathlib.Path('.claude/planner_config.toml'); print('FOUND: ' + str(p) if p.exists() else 'MISSING')"`
 
-Executor script: !`find "$HOME/.claude" -path "*/task-slicer/scripts/slicer.py" 2>/dev/null | sort | tail -1`
+Executor script: !`python -c "import pathlib; hits=sorted(pathlib.Path.home().joinpath('.claude').rglob('task-slicer/scripts/slicer.py')); print(str(hits[-1]) if hits else 'NOT FOUND')"`
 
 Project file tree:
-!`find . -type f -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./__pycache__/*" -not -path "./.venv/*" -not -path "./venv/*" -not -path "./dist/*" -not -path "./build/*" | sort | head -300`
+!`python -c "
+import pathlib
+ignored = {'.git','__pycache__','node_modules','.venv','venv','dist','build','.mypy_cache','.pytest_cache','.ruff_cache'}
+files = sorted(p for p in pathlib.Path('.').rglob('*') if p.is_file() and not any(d in p.parts for d in ignored))
+print('\n'.join(str(f) for f in files[:300]))
+"`
 
 ## Step 2 — Produce the slice plan
 
@@ -53,7 +58,7 @@ Full JSON plan:
 
 ## Step 4 — Offer execution (optional)
 
-If the config file from Step 1 shows **FOUND** and the executor script path is not empty, ask:
+If the config file from Step 1 shows **FOUND** and the executor script shows a valid path (not **NOT FOUND**), ask:
 
 > "Would you like to execute the slices using the configured executor model?
 >
@@ -64,9 +69,9 @@ If the config file from Step 1 shows **FOUND** and the executor script path is n
 If the user wants to execute, for each selected slice (in dependency order), run:
 
 ```bash
-python3 "{executor script path}" '{slice JSON as single-line string}' "{current working directory}"
+python "{executor script path}" '{slice JSON as single-line string}' "{current working directory}"
 ```
 
 Display the executor's output for each slice. If a slice exits non-zero, show the error and stop before running dependent slices.
 
-If config is **MISSING** or the script path is empty, display the plan only and note that execution requires `.claude/planner_config.toml` to be configured.
+If config is **MISSING** or the script is **NOT FOUND**, display the plan only and note that execution requires `.claude/planner_config.toml` to be configured.
