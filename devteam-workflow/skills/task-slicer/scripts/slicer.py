@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
-Task slicer: decomposes a user request into task slices for delegation to an
-executor model. Sends the planner prompt + request + file tree to an
-OpenAI-compatible API endpoint configured in .claude/planner_config.toml.
+Slice executor: sends a single task slice to a configured executor model and
+prints the response. The planner (Claude) produces the slice plan; this script
+executes individual slices against a weaker model via an OpenAI-compatible API.
 
 Usage:
-    slicer.py <user_request> [project_root]
+    slicer.py <slice_json> [project_root]
 
 Arguments:
-    user_request   Description of the implementation task to slice.
-    project_root   Path to the project root (default: current directory).
-                   Used to locate .claude/planner_config.toml and build the
-                   file tree.
+    slice_json    JSON string of a single slice object (id, description,
+                  target_files, acceptance_criteria, context, risk_level).
+    project_root  Path to the project root (default: current directory).
+                  Used to locate .claude/planner_config.toml and to read the
+                  contents of target_files.
 
 Exit codes:
-    0  Success — JSON slice plan printed to stdout.
-    1  Configuration error or API failure — error printed to stderr.
+    0  Success — executor model response printed to stdout.
+    1  Configuration error, API failure, or invalid slice — error on stderr.
 """
 
 import json
@@ -37,8 +38,7 @@ Create .claude/{filename} in your project root with the following content:
   [model]
   endpoint   = "https://api.openai.com/v1/chat/completions"
   api_key    = "sk-..."
-  name       = "gpt-4o"
-  max_slices = 8
+  name       = "gpt-4o-mini"
   max_tokens = 4096
 """.format(filename=_CONFIG_FILENAME)
 
@@ -47,6 +47,25 @@ _IGNORED_DIRS = {
     "dist", "build", ".mypy_cache", ".pytest_cache", ".ruff_cache",
     ".tox", "htmlcov", "coverage",
 }
+
+_EXECUTOR_SYSTEM_PROMPT = """\
+You are a code implementation assistant. You will be given a specific, \
+scoped coding task to implement. Apply the changes described and return \
+the complete updated contents of every file you modify or create.
+
+Rules:
+- Make ONLY the changes described in the task. Do not refactor unrelated code.
+- For each file changed or created, output it using this exact format:
+
+=== FILE: <relative/path/to/file> ===
+<complete file contents>
+=== END FILE ===
+
+- If a file is not modified, do not include it in the output.
+- Do not include any explanatory text outside the FILE blocks.
+- Follow the existing code style and patterns shown in the current file contents.
+- Satisfy all acceptance criteria listed in the task.
+"""
 
 
 def _load_config(project_root: pathlib.Path) -> dict:
@@ -58,7 +77,7 @@ def _load_config(project_root: pathlib.Path) -> dict:
 
     Returns:
         dict: Parsed configuration with at minimum a 'model' sub-dict
-              containing 'endpoint', 'api_key', 'name', 'max_slices'.
+              containing 'endpoint', 'api_key', 'name'.
 
     Raises:
         SystemExit(1): If the config file does not exist or cannot be parsed.
@@ -125,12 +144,10 @@ def _minimal_toml_parse(text: str) -> dict:
             k, _, v = line.partition("=")
             k = k.strip()
             v = v.strip()
-            # Strip quotes
             if (v.startswith('"') and v.endswith('"')) or \
                (v.startswith("'") and v.endswith("'")):
                 v = v[1:-1]
             else:
-                # Try int/float coercion
                 try:
                     v = int(v)
                 except ValueError:
@@ -150,93 +167,92 @@ def _resolve_model_config(config: dict) -> dict:
         config (dict): Full parsed TOML config.
 
     Returns:
-        dict: Flat dict with keys: endpoint, api_key, name, max_slices,
-              max_tokens.
+        dict: Flat dict with keys: endpoint, api_key, name, max_tokens.
     """
     base = config.get("model", config)
     return {
-        "endpoint": base.get(
-            "endpoint", "https://api.openai.com/v1/chat/completions"
-        ),
+        "endpoint":   base.get("endpoint", "https://api.openai.com/v1/chat/completions"),
         "api_key":    str(base.get("api_key", "")),
-        "name":       str(base.get("name", "gpt-4o")),
-        "max_slices": int(base.get("max_slices", 8)),
+        "name":       str(base.get("name", "gpt-4o-mini")),
         "max_tokens": int(base.get("max_tokens", 4096)),
     }
 
 
 # ---------------------------------------------------------------------------
-# File tree
+# File reading
 # ---------------------------------------------------------------------------
 
-def _build_file_tree(root: pathlib.Path, max_files: int = 300) -> str:
+def _read_target_files(
+    project_root: pathlib.Path,
+    target_files: list[str],
+) -> dict[str, str]:
     """
-    Build a compact indented file tree string, excluding common noise dirs.
+    Read the current contents of each target file relative to project_root.
 
     Parameters:
-        root (pathlib.Path): Project root to walk.
-        max_files (int): Maximum number of files to include before truncating.
+        project_root (pathlib.Path): Project root directory.
+        target_files (list[str]):    Relative file paths from the slice.
 
     Returns:
-        str: Multi-line indented tree, suitable for inclusion in a prompt.
+        dict[str, str]: Map of relative path -> file contents (or an error
+                        note if the file cannot be read).
+    """
+    contents: dict[str, str] = {}
+    for rel_path in target_files:
+        full_path = project_root / rel_path
+        if full_path.exists() and full_path.is_file():
+            try:
+                contents[rel_path] = full_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                contents[rel_path] = f"[Could not read file: {exc}]"
+        else:
+            contents[rel_path] = "[File does not exist yet — create it]"
+    return contents
+
+
+# ---------------------------------------------------------------------------
+# Prompt construction
+# ---------------------------------------------------------------------------
+
+def _build_executor_message(
+    slice_data: dict,
+    file_contents: dict[str, str],
+) -> str:
+    """
+    Build the user message for the executor model from the slice data and the
+    current contents of the target files.
+
+    Parameters:
+        slice_data (dict):            The single slice object from the plan.
+        file_contents (dict[str,str]): Map of relative path -> current file text.
+
+    Returns:
+        str: Fully formatted message to send as the user turn.
 
     Example usage:
-        tree = _build_file_tree(pathlib.Path("."))
+        msg = _build_executor_message(slice, {"src/foo.py": "..."})
     """
-    lines: list[str] = []
-    count = 0
+    parts: list[str] = []
 
-    for path in sorted(root.rglob("*")):
-        if count >= max_files:
-            lines.append(f"  ... (truncated at {max_files} entries)")
-            break
-        try:
-            parts = path.relative_to(root).parts
-        except ValueError:
-            continue
-        if any(p in _IGNORED_DIRS or p.endswith(".egg-info") for p in parts):
-            continue
-        if path.is_file():
-            indent = "  " * (len(parts) - 1)
-            lines.append(f"{indent}{path.name}")
-            count += 1
+    parts.append(f"## Task: {slice_data.get('id', 'unknown')}")
+    parts.append(f"\n{slice_data.get('description', '')}")
 
-    return "\n".join(lines)
+    criteria = slice_data.get("acceptance_criteria", [])
+    if criteria:
+        parts.append("\n## Acceptance criteria")
+        for criterion in criteria:
+            parts.append(f"- {criterion}")
 
+    context = slice_data.get("context", "").strip()
+    if context:
+        parts.append(f"\n## Context\n{context}")
 
-# ---------------------------------------------------------------------------
-# Planner prompt
-# ---------------------------------------------------------------------------
+    if file_contents:
+        parts.append("\n## Current file contents")
+        for rel_path, content in file_contents.items():
+            parts.append(f"\n### {rel_path}\n```\n{content}\n```")
 
-def _load_system_prompt(script_dir: pathlib.Path, max_slices: int) -> str:
-    """
-    Load the planner system prompt from planner-prompt.md in the skill root
-    (one level above the scripts/ directory), then substitute {max_slices}.
-
-    Parameters:
-        script_dir (pathlib.Path): Directory containing this script.
-        max_slices (int): Maximum slices to allow; substituted into the prompt.
-
-    Returns:
-        str: Fully rendered system prompt.
-
-    Raises:
-        SystemExit(1): If planner-prompt.md cannot be found.
-    """
-    candidates = [
-        script_dir.parent / "planner-prompt.md",
-        script_dir / "planner-prompt.md",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.read_text(encoding="utf-8").replace(
-                "{max_slices}", str(max_slices)
-            )
-
-    _fatal(
-        "planner-prompt.md not found. Expected at: "
-        + str(candidates[0])
-    )
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -256,12 +272,12 @@ def _call_api(
     endpoint and return the assistant message content.
 
     Parameters:
-        endpoint (str): Full URL of the chat completions endpoint.
-        api_key (str): Bearer token for the API.
-        model (str): Model identifier (e.g. "gpt-4o").
-        system_prompt (str): Planner system prompt.
-        user_message (str): User request + file tree.
-        max_tokens (int): Maximum tokens in the response.
+        endpoint (str):      Full URL of the chat completions endpoint.
+        api_key (str):       Bearer token for the API.
+        model (str):         Model identifier (e.g. "gpt-4o-mini").
+        system_prompt (str): Executor system prompt.
+        user_message (str):  Slice task description + current file contents.
+        max_tokens (int):    Maximum tokens in the response.
 
     Returns:
         str: Raw content string from the first choice.
@@ -290,7 +306,7 @@ def _call_api(
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=90) as response:
+        with urllib.request.urlopen(request, timeout=120) as response:
             data = json.loads(response.read())
         return data["choices"][0]["message"]["content"]
     except urllib.error.HTTPError as exc:
@@ -300,29 +316,6 @@ def _call_api(
         _fatal(f"Network error reaching {endpoint}: {exc.reason}")
     except (KeyError, IndexError, json.JSONDecodeError) as exc:
         _fatal(f"Unexpected API response format: {exc}")
-
-
-# ---------------------------------------------------------------------------
-# Output
-# ---------------------------------------------------------------------------
-
-def _extract_json(raw: str) -> str:
-    """
-    Strip markdown code fences that some models wrap around JSON output.
-
-    Parameters:
-        raw (str): Raw string from the model response.
-
-    Returns:
-        str: String with leading/trailing fences removed.
-    """
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        start = 1
-        end = len(lines) - 1 if lines[-1].strip() == "```" else len(lines)
-        text = "\n".join(lines[start:end])
-    return text
 
 
 # ---------------------------------------------------------------------------
@@ -346,51 +339,43 @@ def _fatal(message: str) -> None:
 
 def main() -> None:
     """
-    Parse arguments, load configuration, build the file tree, call the API,
-    and print the JSON slice plan to stdout.
+    Parse arguments, load configuration, read target file contents, call the
+    executor model with the slice task, and print the response to stdout.
     """
     if len(sys.argv) < 2:
         print(
-            "Usage: slicer.py <user_request> [project_root]",
+            "Usage: slicer.py <slice_json> [project_root]",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    user_request = sys.argv[1]
-    project_root = pathlib.Path(sys.argv[2] if len(sys.argv) > 2 else os.getcwd())
-    script_dir   = pathlib.Path(__file__).parent
+    # Parse slice JSON
+    try:
+        slice_data = json.loads(sys.argv[1])
+    except json.JSONDecodeError as exc:
+        _fatal(f"Invalid slice JSON: {exc}")
 
-    config     = _load_config(project_root)
-    model_cfg  = _resolve_model_config(config)
+    project_root = pathlib.Path(sys.argv[2] if len(sys.argv) > 2 else os.getcwd())
+    config       = _load_config(project_root)
+    model_cfg    = _resolve_model_config(config)
 
     if not model_cfg["api_key"]:
-        _fatal(
-            "api_key is empty in planner_config.toml.\n\n" + _CONFIG_HELP
-        )
+        _fatal("api_key is empty in planner_config.toml.\n\n" + _CONFIG_HELP)
 
-    system_prompt = _load_system_prompt(script_dir, model_cfg["max_slices"])
-    file_tree     = _build_file_tree(project_root)
-    user_message  = (
-        f"User request: {user_request}\n\n"
-        f"Project file tree:\n{file_tree}"
-    )
+    target_files  = slice_data.get("target_files", [])
+    file_contents = _read_target_files(project_root, target_files)
+    user_message  = _build_executor_message(slice_data, file_contents)
 
-    raw    = _call_api(
+    response = _call_api(
         endpoint      = model_cfg["endpoint"],
         api_key       = model_cfg["api_key"],
         model         = model_cfg["name"],
-        system_prompt = system_prompt,
+        system_prompt = _EXECUTOR_SYSTEM_PROMPT,
         user_message  = user_message,
         max_tokens    = model_cfg["max_tokens"],
     )
-    clean  = _extract_json(raw)
 
-    try:
-        parsed = json.loads(clean)
-        print(json.dumps(parsed, indent=2))
-    except json.JSONDecodeError:
-        # Model returned non-JSON — print as-is so the user can see it
-        print(clean)
+    print(response)
 
 
 if __name__ == "__main__":

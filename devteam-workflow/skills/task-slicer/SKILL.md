@@ -1,6 +1,6 @@
 ---
 name: task-slicer
-description: Decompose an implementation request into small, focused task slices for delegation to an executor model. Reads planner_config.toml from .claude/ in the active project. Use when breaking down implementation work into independently executable chunks.
+description: Decompose an implementation request into small, focused task slices, then optionally execute each slice against a configured executor model. Use when breaking down implementation work into independently executable chunks.
 disable-model-invocation: true
 argument-hint: "[description of the implementation task to slice]"
 ---
@@ -9,49 +9,26 @@ argument-hint: "[description of the implementation task to slice]"
 
 Decompose this request into task slices: **$ARGUMENTS**
 
-Locate and run the slicer script, then display the resulting slice plan.
-
 ## Step 1 — Check prerequisites
 
-Config file location: !`[ -f ".claude/planner_config.toml" ] && echo "FOUND: .claude/planner_config.toml" || echo "MISSING"`
+Config file: !`[ -f ".claude/planner_config.toml" ] && echo "FOUND: .claude/planner_config.toml" || echo "MISSING"`
 
-Slicer script: !`find "$HOME/.claude" -path "*/task-slicer/scripts/slicer.py" 2>/dev/null | sort | tail -1`
+Executor script: !`find "$HOME/.claude" -path "*/task-slicer/scripts/slicer.py" 2>/dev/null | sort | tail -1`
 
-If the config line above shows **MISSING**, stop immediately and tell the user:
+Project file tree:
+!`find . -type f -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./__pycache__/*" -not -path "./.venv/*" -not -path "./venv/*" -not -path "./dist/*" -not -path "./build/*" | sort | head -300`
 
-```
-ERROR: .claude/planner_config.toml not found.
+## Step 2 — Produce the slice plan
 
-Create it with the following content:
+Read [planner-prompt.md](planner-prompt.md) and follow its rules exactly to decompose **$ARGUMENTS** into task slices.
 
-[model]
-endpoint  = "https://api.openai.com/v1/chat/completions"
-api_key   = "sk-..."
-name      = "gpt-4o"
-max_slices = 8
-```
+Use the project file tree from Step 1 to determine which files exist. Only reference files that appear in the tree.
 
-If the slicer script line is empty, stop and tell the user:
-```
-ERROR: slicer.py not found in the Claude plugin cache.
-Re-install the devteam-workflow plugin, or reinstall from the marketplace.
-```
-
-## Step 2 — Run the slicer
-
-Using the resolved slicer script path from Step 1, run:
-
-```bash
-python3 "{resolved script path}" "{$ARGUMENTS}" "{current working directory}"
-```
-
-Pass the current working directory as the third argument so the script can locate `.claude/planner_config.toml` relative to the project root.
-
-If the script exits with a non-zero code, display the error output and stop.
+Produce a valid JSON slice plan matching the format defined in planner-prompt.md.
 
 ## Step 3 — Display the slice plan
 
-Parse and present the JSON output in a readable format:
+Present the JSON in a readable format:
 
 ```
 ## Task Slice Plan
@@ -74,7 +51,22 @@ Full JSON plan:
 {pretty-printed JSON}
 ```
 
-## Additional resources
+## Step 4 — Offer execution (optional)
 
-- Planner system prompt: [planner-prompt.md](planner-prompt.md)
-- Config schema: see Step 1 error message above
+If the config file from Step 1 shows **FOUND** and the executor script path is not empty, ask:
+
+> "Would you like to execute the slices using the configured executor model?
+>
+> - **Yes, all** — run every slice sequentially
+> - **Yes, select** — choose which slices to run
+> - **No** — stop here with the plan"
+
+If the user wants to execute, for each selected slice (in dependency order), run:
+
+```bash
+python3 "{executor script path}" '{slice JSON as single-line string}' "{current working directory}"
+```
+
+Display the executor's output for each slice. If a slice exits non-zero, show the error and stop before running dependent slices.
+
+If config is **MISSING** or the script path is empty, display the plan only and note that execution requires `.claude/planner_config.toml` to be configured.
