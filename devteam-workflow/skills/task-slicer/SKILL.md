@@ -11,39 +11,38 @@ Decompose this request into task slices: **$ARGUMENTS**
 
 ## Step 0 — Check for existing slices
 
-Existing slice files:
-!`python -c "import pathlib; p=pathlib.Path('.claude/task-slices'); files=sorted(p.glob('*.json')) if p.exists() else []; print('\n'.join(f.name for f in files) if files else 'NONE')"`
-
-Compute the **task key** from `$ARGUMENTS`:
+Compute the **task key** from `$ARGUMENTS` in your reasoning:
 1. Normalise: strip leading/trailing whitespace, collapse internal whitespace to single spaces, lowercase
 2. Hash: `hashlib.sha256(normalised.encode()).hexdigest()[:12]`
 3. Slug: take the first 6 words of the normalised text, replace any non-alphanumeric characters with `-`, join with `-`
 4. Expected filename: `<hash>-<slug>.json`
+5. Expected path: `.claude/task-slices/<hash>-<slug>.json`
 
-Check whether the expected filename appears in the listing above.
+Use your **Read** tool to attempt to read `.claude/task-slices/<hash>-<slug>.json`.
 
-**If found:** Read `.claude/task-slices/<hash>-<slug>.json`, extract the `created_at` and `plan` fields, display the plan using the table format from Step 3, then ask:
+**If the file exists:** Extract the `created_at` and `plan` fields, display the plan using the table format from Step 3, then ask:
 
 > "Slices for this task were saved on {created_at}. What would you like to do?
 >
 > - **Use existing** — proceed to Step 4 with the loaded plan
 > - **Regenerate** — continue to Step 1 (existing file will be overwritten)"
 
-**If not found:** Continue to Step 1.
+**If the file does not exist:** Continue to Step 1.
 
 ## Step 1 — Check prerequisites
 
-Config file: !`python -c "import pathlib; p=pathlib.Path('.claude/planner_config.toml'); print('FOUND: ' + str(p) if p.exists() else 'MISSING')"`
+Use your **Read** tool to check whether `.claude/planner_config.toml` exists.
+- If it exists: note **FOUND** and read its contents to confirm the model endpoint.
+- If it does not exist: note **MISSING** — execution will not be available.
 
-Executor script: !`python -c "import pathlib; hits=sorted(pathlib.Path.home().joinpath('.claude').rglob('task-slicer/scripts/slicer.py')); print(str(hits[-1]) if hits else 'NOT FOUND')"`
+Use your **Glob** tool with the pattern `**/.claude/**/task-slicer/scripts/slicer.py` (from the home directory or a known plugins path) to locate `slicer.py`.
+- If found: note the path. On Windows, also try `C:/Users/**/.claude/**/task-slicer/scripts/slicer.py`.
+- If not found: note **NOT FOUND** — execution will not be available.
 
-Project file tree:
-!`python -c "
-import pathlib
-ignored = {'.git','__pycache__','node_modules','.venv','venv','dist','build','.mypy_cache','.pytest_cache','.ruff_cache'}
-files = sorted(p for p in pathlib.Path('.').rglob('*') if p.is_file() and not any(d in p.parts for d in ignored))
-print('\n'.join(str(f) for f in files[:300]))
-"`
+Use your **Glob** tool to build the project file tree. Run these patterns and combine the results, ignoring hits under `.git`, `node_modules`, `__pycache__`, `.venv`, `venv`, `dist`, `build`, `target` (Rust):
+- `**/*.rs`, `**/*.py`, `**/*.ts`, `**/*.js`, `**/*.go`, `**/*.toml`, `**/*.json`, `**/*.yaml`, `**/*.md`
+
+List the matching files (up to 300). Use this list in Step 2 to determine which files already exist.
 
 ## Step 2 — Produce the slice plan
 
@@ -78,7 +77,7 @@ Full JSON plan:
 {pretty-printed JSON}
 ```
 
-Then save the plan to `.claude/task-slices/<hash>-<slug>.json` (creating the directory if it does not exist) with this structure:
+Use your **Write** tool to save the plan to `.claude/task-slices/<hash>-<slug>.json` with this structure:
 
 ```json
 {
@@ -88,6 +87,8 @@ Then save the plan to `.claude/task-slices/<hash>-<slug>.json` (creating the dir
   "plan": { ...the complete slice plan JSON... }
 }
 ```
+
+If the `.claude/task-slices/` directory does not yet exist, create it first using your **Bash** tool with `mkdir -p .claude/task-slices` — this single-purpose directory creation command does not require complex shell syntax and will not trigger permission issues.
 
 Confirm to the user: `"Plan saved to .claude/task-slices/<filename>"`
 
@@ -101,10 +102,10 @@ If the config file from Step 1 shows **FOUND** and the executor script shows a v
 > - **Yes, select** — choose which slices to run
 > - **No** — stop here with the plan"
 
-If the user wants to execute, for each selected slice (in dependency order), run:
+If the user wants to execute, for each selected slice (in dependency order), use your **Bash** tool to run:
 
-```bash
-python "{executor script path}" '{slice JSON as single-line string}' "{current working directory}"
+```
+python "<executor script path>" "<slice JSON as single-line string>" "<current working directory>"
 ```
 
 Display the executor's output for each slice. If a slice exits non-zero, show the error and stop before running dependent slices.
