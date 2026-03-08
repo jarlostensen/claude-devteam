@@ -48,7 +48,7 @@ Create .claude/{filename} in your project root with the following content:
   name       = "gpt-4o-mini"
   max_tokens = 4096
   max_turns  = 10
-  timeout    = 240
+  timeout    = 1200    # seconds per API call; 1200 recommended for local thinking models
   stream     = false   # set true for local thinking models (qwen3, deepseek-r1, etc.)
 """.format(filename=_CONFIG_FILENAME)
 
@@ -533,7 +533,7 @@ def _resolve_model_config(config: dict) -> dict:
         "name":       str(base.get("name", "gpt-4o-mini")),
         "max_tokens": int(base.get("max_tokens", 4096)),
         "max_turns":  int(base.get("max_turns", 10)),
-        "timeout":    int(base.get("timeout", 240)),
+        "timeout":    int(base.get("timeout", 1200)),
         "stream":     raw_stream is True or str(raw_stream).lower() == "true",
     }
 
