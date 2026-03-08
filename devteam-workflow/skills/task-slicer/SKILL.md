@@ -102,12 +102,51 @@ If the config file from Step 1 shows **FOUND** and the executor script shows a v
 > - **Yes, select** — choose which slices to run
 > - **No** — stop here with the plan"
 
-If the user wants to execute, for each selected slice (in dependency order), use your **Bash** tool to run:
+If config is **MISSING** or the script is **NOT FOUND**, display the plan only and note that execution requires `.claude/planner_config.toml` to be configured.
+
+---
+
+## Step 4a — Execute each slice
+
+For each selected slice (in dependency order), use your **Bash** tool to run:
 
 ```
 python "<executor script path>" "<slice JSON as single-line string>" "<current working directory>"
 ```
 
-Display the executor's output for each slice. If a slice exits non-zero, show the error and stop before running dependent slices.
+Capture the full stdout. If the process exits non-zero, show the error output and stop — do not proceed to dependent slices.
 
-If config is **MISSING** or the script is **NOT FOUND**, display the plan only and note that execution requires `.claude/planner_config.toml` to be configured.
+---
+
+## Step 4b — Apply the executor's output
+
+The executor outputs file contents as text. **It does not write files to disk.** You must apply each file yourself.
+
+For every `=== FILE: <path> === ... === END FILE ===` block in the stdout:
+
+1. **Create any missing parent directories** — use your **Bash** tool: `mkdir -p "<parent directory>"` if the directory does not yet exist.
+2. **Write the file** — use your **Write** tool with the exact path from the FILE header and the exact content between the markers. Do not add, remove, or alter any characters.
+3. **Confirm** — after writing, note: `"Written: <path>"`.
+
+If the executor output contains no FILE blocks (e.g. a timeout or error message), do not write anything. Show the raw output to the user and ask how to proceed.
+
+---
+
+## Step 4c — Verify the acceptance criteria
+
+After applying the files for a slice, check each of its `acceptance_criteria` entries in order.
+
+Run any shell command the criterion refers to (e.g. `cargo check`, `python -m py_compile`, `pytest`) using your **Bash** tool from the appropriate working directory.
+
+For each criterion report one of:
+
+- **PASS** — the command exited 0 or the condition is met.
+- **FAIL** — the command failed. Show the relevant output (last 20 lines). Do not proceed to dependent slices until this is resolved.
+
+After all criteria for a slice pass, print a summary line:
+
+```
+[slice_NNN] PASS — <N> file(s) written, all acceptance criteria met.
+```
+
+Then continue to the next slice.
