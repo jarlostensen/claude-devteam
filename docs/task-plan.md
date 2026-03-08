@@ -77,3 +77,113 @@ python -m py_compile devteam-workflow/skills/task-slicer/scripts/slicer.py
   - Acceptance: `SKILL.md` contains the save instruction after Step 3
   - Acceptance: After running, the file exists at the expected path with valid JSON
   - Acceptance: Running with a different task description produces a different filename
+
+### Phase 4: Executor and planner improvements (from ISS-001 – ISS-006)
+
+Evidence source: `docs/slice-execution-report.md` (2026-03-08 test run, qwen3-coder-next).
+
+Tasks are ordered by impact-to-effort ratio: highest-impact/lowest-effort first.
+
+---
+
+- [x] TASK-006: Configurable API timeout and stricter system prompt in `slicer.py` [ISS-004, ISS-002]
+
+  **Why**: 3 of 6 slices timed out at the hardcoded 120-second limit. Local models on consumer
+  hardware need 180–300 s for large prompts. Also tighten the system prompt to address the
+  markdown fence and external text issues at the instruction level (defensive layer before
+  the post-processor in TASK-007).
+
+  **Changes to `slicer.py`**:
+  - Add `timeout` key to `_resolve_model_config` (default: `240`)
+  - Read from `[model]` section in `planner_config.toml`; update `_CONFIG_HELP` example
+  - Pass `timeout` value to `urllib.request.urlopen(req, timeout=timeout)`
+  - Extend `_EXECUTOR_SYSTEM_PROMPT` with:
+    > "Do NOT wrap file contents in markdown code fences (` ``` `, ` ```rust `, etc.). Output raw
+    > source code directly between the FILE markers. Do NOT output any text, reasoning, or
+    > commentary before or after the `=== FILE: ... ===` blocks."
+
+  **Acceptance**:
+  - `python -m py_compile slicer.py` exits 0
+  - Setting `timeout = 240` in `planner_config.toml` is read and passed to `urlopen`
+  - `_EXECUTOR_SYSTEM_PROMPT` contains explicit prohibition of markdown fences and external text
+
+---
+
+- [x] TASK-007: FILE-block output post-processor in `slicer.py` [ISS-002]
+
+  **Why**: Even with a stricter system prompt, local models frequently wrap code in markdown
+  fences inside FILE blocks and leak explanation text outside them. A post-processor makes
+  the output clean regardless of model compliance, avoiding manual cleanup.
+
+  **Changes to `slicer.py`**:
+  - Add `_clean_executor_response(text: str) -> str` function:
+    1. Extract all `=== FILE: <path> ===\n...\n=== END FILE ===` blocks using regex
+    2. For each block body, strip a leading ` ```[lang] ` line and trailing ` ``` ` line if present
+    3. Strip leading/trailing blank lines from each block body
+    4. Reassemble: return only the cleaned FILE blocks joined by `\n\n`, discarding all text outside
+    5. If no FILE blocks are found at all, return the original text unchanged (preserves conversational/tool-only responses)
+  - Call `_clean_executor_response(content)` on the final response inside `_run_executor` before returning
+
+  **Acceptance**:
+  - `python -m py_compile slicer.py` exits 0
+  - Unit test (doctest or inline): input with explanatory prefix + markdown-fenced FILE block → output is clean FILE block with no fences and no prefix text
+  - Input with no FILE blocks → output unchanged
+
+---
+
+- [x] TASK-008: `context_files` slice field — preload read-only dependency files [ISS-003, ISS-005]
+
+  **Why**: Two failure modes share the same root cause — the model lacked context it needed and
+  either explored via tool calls (burning turns → timeout) or hallucinated function names.
+  A `context_files` field lets the planner declare files the executor needs to *read* but
+  not *modify*, so they are preloaded without appearing in `target_files`.
+
+  **Changes to `slicer.py`**:
+  - In `main()`: read `slice_data.get("context_files", [])` alongside `target_files`
+  - Add `_read_context_files(project_root, context_files) -> dict[str, str]` (same logic as
+    `_read_target_files` but returns `[NOT FOUND]` instead of `[create it]` for missing files)
+  - In `_build_executor_message`: add a distinct `## Reference files (do not modify)` section
+    after the target files section, containing the context file contents
+  - Update docstrings
+
+  **Changes to `planner-prompt.md`**:
+  - Add `context_files` to the slice JSON schema example (optional array, default `[]`)
+  - Add rule: "For slices that call functions defined in other modules, list those modules in
+    `context_files` and copy their complete public function signatures into the `context` field."
+
+  **Acceptance**:
+  - `python -m py_compile slicer.py` exits 0
+  - A slice with `context_files: ["test/src/stats.rs"]` includes that file's content under
+    "Reference files" in the executor message
+  - `planner-prompt.md` schema and rule are updated
+
+---
+
+- [x] TASK-009: Three new planner rules in `planner-prompt.md` [ISS-001, ISS-005, ISS-006]
+
+  **Why**: The three most impactful planner failures were caused by absent rules, not model
+  capability. Adding explicit rules to `planner-prompt.md` fixes them at the source for all
+  future slice plans, not just this one.
+
+  **Rule 1 — No forward references (fixes ISS-001)**:
+  > "If a file X will be *created* in a later slice, do not add `mod X`, `use X`, `import X`,
+  > or any other reference to X in an earlier slice. The reference belongs in the same slice
+  > that creates X, or in a dedicated wiring slice. Never write a slice whose acceptance
+  > criteria require `cargo check` / `build` to pass if the slice itself introduces references
+  > to files that will not exist until a later slice."
+
+  **Rule 2 — Integration slices must include dependency signatures (fixes ISS-005)**:
+  > "For any slice whose implementation calls functions defined in a *different* module, add
+  > those modules to `context_files` and copy their complete public function signatures
+  > (including parameter names, types, and return types) verbatim into the `context` field.
+  > Never assume the executor will infer an interface it has not been shown."
+
+  **Rule 3 — One source file per test slice (fixes ISS-006)**:
+  > "Test slices must target exactly one source file. Do not combine tests for multiple modules
+  > in a single slice — split into one slice per module under test. This keeps the preloaded
+  > context small enough for the executor model to handle."
+
+  **Acceptance**:
+  - All three rules are present in `planner-prompt.md` under a `## Planner Rules` or
+    `## Slice Design Rules` heading
+  - The existing rules are preserved and numbered consistently

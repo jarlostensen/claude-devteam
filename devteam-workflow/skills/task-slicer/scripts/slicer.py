@@ -48,6 +48,7 @@ Create .claude/{filename} in your project root with the following content:
   name       = "gpt-4o-mini"
   max_tokens = 4096
   max_turns  = 10
+  timeout    = 240
 """.format(filename=_CONFIG_FILENAME)
 
 _IGNORED_DIRS = {
@@ -63,21 +64,25 @@ scoped coding task to implement.
 ## Your ONLY output: file contents
 
 Write the complete contents of every file you create or modify using \
-this exact format and nothing else outside it:
+this EXACT format:
 
 === FILE: <relative/path/to/file> ===
-<complete file contents>
+<complete raw file contents>
 === END FILE ===
 
-Do NOT include files that are unchanged.
-Do NOT add explanation outside the FILE blocks — only file contents.
+CRITICAL formatting rules:
+- Do NOT wrap file contents in markdown code fences (no ``` or ```rust or \
+any other ``` markers). Output raw source code only.
+- Do NOT write any text, commentary, reasoning, or explanation before the \
+first === FILE: === block or after the last === END FILE === block.
+- Do NOT include files that are unchanged.
+- If a file is new, write its complete contents from scratch.
 
 ## IMPORTANT constraints
 
 - You CANNOT run shell commands. Do not call cargo, git, npm, or any CLI tool.
 - You CANNOT write or delete files directly. Output them in the FILE format above.
 - You CANNOT execute code. Write it; the human will run it.
-- If a file is new, write its full contents from scratch.
 
 ## Two read-only tools (use only when a file you need was not provided)
 
@@ -526,6 +531,7 @@ def _resolve_model_config(config: dict) -> dict:
         "name":       str(base.get("name", "gpt-4o-mini")),
         "max_tokens": int(base.get("max_tokens", 4096)),
         "max_turns":  int(base.get("max_turns", 10)),
+        "timeout":    int(base.get("timeout", 240)),
     }
 
 
@@ -560,21 +566,53 @@ def _read_target_files(
     return contents
 
 
+def _read_context_files(
+    project_root: pathlib.Path,
+    context_files: list[str],
+) -> dict[str, str]:
+    """Read read-only reference files listed in the slice's context_files field.
+
+    Unlike target files, context files are expected to already exist.
+    A missing context file is noted but does not abort execution.
+
+    Parameters:
+        project_root (pathlib.Path): Project root directory.
+        context_files (list[str]):   Relative paths of files to read for context.
+
+    Returns:
+        dict[str, str]: Map of relative path to file contents (or an error
+                        note if the file cannot be found or read).
+    """
+    contents: dict[str, str] = {}
+    for rel_path in context_files:
+        full = project_root / rel_path
+        if full.exists() and full.is_file():
+            try:
+                contents[rel_path] = full.read_text(encoding="utf-8")
+            except OSError as exc:
+                contents[rel_path] = f"[Could not read: {exc}]"
+        else:
+            contents[rel_path] = "[NOT FOUND — file does not exist]"
+    return contents
+
+
 def _build_executor_message(
     slice_data: dict,
     file_contents: dict[str, str],
+    context_contents: dict[str, str],
 ) -> str:
     """Build the initial user message for the executor model.
 
     Parameters:
-        slice_data (dict):             The single slice object from the plan.
-        file_contents (dict[str,str]): Map of relative path to current text.
+        slice_data (dict):                The single slice object from the plan.
+        file_contents (dict[str,str]):    Map of target path to current text.
+        context_contents (dict[str,str]): Map of context_files path to text.
 
     Returns:
         str: Formatted message to send as the first user turn.
 
     Example usage:
-        msg = _build_executor_message(slice, {"src/foo.py": "..."})
+        msg = _build_executor_message(slice, {"src/foo.py": "..."}, {})
     """
     parts: list[str] = []
 
@@ -592,11 +630,72 @@ def _build_executor_message(
         parts.append(f"\n## Context\n{ctx}")
 
     if file_contents:
-        parts.append("\n## Current file contents")
+        parts.append("\n## Files to implement (create or modify these)")
         for rel_path, content in file_contents.items():
             parts.append(f"\n### {rel_path}\n```\n{content}\n```")
 
+    if context_contents:
+        parts.append(
+            "\n## Reference files (do not modify — provided for context only)"
+        )
+        for rel_path, content in context_contents.items():
+            parts.append(f"\n### {rel_path}\n```\n{content}\n```")
+
     return "\n".join(parts)
+
+
+# FILE block pattern: === FILE: path === ... === END FILE ===
+_FILE_BLOCK_RE = re.compile(
+    r"=== FILE: (?P<path>[^\n]+?) ===\n(?P<body>.*?)\n=== END FILE ===",
+    re.DOTALL,
+)
+# Leading/trailing markdown code fence inside a FILE block body
+_FENCE_RE = re.compile(
+    r"^\s*```[a-zA-Z0-9_+-]*\n(?P<inner>.*?)\n\s*```\s*$",
+    re.DOTALL,
+)
+
+
+def _clean_executor_response(text: str) -> str:
+    """Extract and clean FILE blocks from the executor model's response.
+
+    Strips two common formatting mistakes local models make:
+    1. Explanatory text before/after FILE blocks.
+    2. Markdown code fences (```lang ... ```) wrapping code inside FILE blocks.
+
+    If no FILE blocks are found, returns the original text unchanged so that
+    conversational or error responses pass through unmodified.
+
+    Parameters:
+        text (str): Raw response text from the executor model.
+
+    Returns:
+        str: Cleaned output containing only FILE blocks with raw source code,
+             or the original text if no FILE blocks are present.
+
+    Example usage:
+        clean = _clean_executor_response(raw_response)
+    """
+    blocks = list(_FILE_BLOCK_RE.finditer(text))
+    if not blocks:
+        return text  # no FILE blocks — return as-is (tool-only or error response)
+
+    cleaned_blocks: list[str] = []
+    for match in blocks:
+        path = match.group("path").strip()
+        body = match.group("body")
+
+        # Strip a single wrapping markdown code fence if present
+        fence_match = _FENCE_RE.match(body)
+        if fence_match:
+            body = fence_match.group("inner")
+
+        # Strip leading/trailing blank lines from the body
+        body = body.strip("\n")
+
+        cleaned_blocks.append(f"=== FILE: {path} ===\n{body}\n=== END FILE ===")
+
+    return "\n\n".join(cleaned_blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -749,15 +848,18 @@ def _api_request(
     model: str,
     messages: list[dict],
     max_tokens: int,
+    timeout: int,
 ) -> dict:
     """Send one chat-completion request and return the parsed JSON response.
 
     Parameters:
-        endpoint (str):       Full URL of the chat completions endpoint.
-        api_key (str):        Bearer token (may be empty for local servers).
-        model (str):          Model identifier.
+        endpoint (str):        Full URL of the chat completions endpoint.
+        api_key (str):         Bearer token (may be empty for local servers).
+        model (str):           Model identifier.
         messages (list[dict]): Full conversation history.
-        max_tokens (int):     Maximum tokens to generate.
+        max_tokens (int):      Maximum tokens to generate.
+        timeout (int):         Socket timeout in seconds. Use a high value
+                               (240+) for local models on consumer hardware.
 
     Returns:
         dict: Parsed API response body.
@@ -781,7 +883,7 @@ def _api_request(
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
@@ -804,13 +906,14 @@ def _run_executor(
     initial_message: str,
     max_tokens: int,
     max_turns: int,
+    timeout: int,
     project_root: pathlib.Path,
 ) -> str:
     """Run the executor model in an agentic loop, handling tool calls.
 
     Sends the initial message, then for each response:
     - If tool calls are present, executes them and feeds results back.
-    - If no tool calls, returns the final response text.
+    - If no tool calls, cleans and returns the final response text.
     Stops after max_turns to prevent runaway loops.
 
     Parameters:
@@ -821,6 +924,7 @@ def _run_executor(
         initial_message (str): First user message (task + file contents).
         max_tokens (int):      Maximum tokens per API call.
         max_turns (int):       Maximum conversation turns before aborting.
+        timeout (int):         Socket timeout per API call in seconds.
         project_root (pathlib.Path): Project root for tool file access.
 
     Returns:
@@ -838,7 +942,7 @@ def _run_executor(
     call_cache: dict[tuple, str] = {}
 
     for turn in range(1, max_turns + 1):
-        response = _api_request(endpoint, api_key, model, messages, max_tokens)
+        response = _api_request(endpoint, api_key, model, messages, max_tokens, timeout)
 
         try:
             content = response["choices"][0]["message"]["content"] or ""
@@ -849,14 +953,14 @@ def _run_executor(
         messages.append({"role": "assistant", "content": content})
 
         if not parser.has_tool_calls(content):
-            # No tool calls — this is the final answer
-            return content
+            # No tool calls — clean and return the final answer
+            return _clean_executor_response(content)
 
         # Parse and execute tool calls
         _, calls = parser.parse(content)
         if not calls:
             # Parser found patterns but could not extract valid calls
-            return content
+            return _clean_executor_response(content)
 
         results: list[str] = []
         for call in calls:
@@ -929,9 +1033,11 @@ def main() -> None:
     if not model_cfg["api_key"] and "localhost" not in model_cfg["endpoint"]:
         _fatal("api_key is empty in planner_config.toml.\n\n" + _CONFIG_HELP)
 
-    target_files   = slice_data.get("target_files", [])
-    file_contents  = _read_target_files(project_root, target_files)
-    initial_message = _build_executor_message(slice_data, file_contents)
+    target_files      = slice_data.get("target_files", [])
+    context_files     = slice_data.get("context_files", [])
+    file_contents     = _read_target_files(project_root, target_files)
+    context_contents  = _read_context_files(project_root, context_files)
+    initial_message   = _build_executor_message(slice_data, file_contents, context_contents)
 
     result = _run_executor(
         endpoint        = model_cfg["endpoint"],
@@ -941,6 +1047,7 @@ def main() -> None:
         initial_message = initial_message,
         max_tokens      = model_cfg["max_tokens"],
         max_turns       = model_cfg["max_turns"],
+        timeout         = model_cfg["timeout"],
         project_root    = project_root,
     )
 
