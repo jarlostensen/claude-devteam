@@ -49,6 +49,7 @@ Create .claude/{filename} in your project root with the following content:
   max_tokens = 4096
   max_turns  = 10
   timeout    = 240
+  stream     = false   # set true for local thinking models (qwen3, deepseek-r1, etc.)
 """.format(filename=_CONFIG_FILENAME)
 
 _IGNORED_DIRS = {
@@ -525,6 +526,7 @@ def _resolve_model_config(config: dict) -> dict:
     # Accept both base URLs (ending in /v1) and full endpoint paths
     if not endpoint.rstrip("/").endswith("/chat/completions"):
         endpoint = endpoint.rstrip("/") + "/chat/completions"
+    raw_stream = base.get("stream", False)
     return {
         "endpoint":   endpoint,
         "api_key":    str(base.get("api_key", "")),
@@ -532,6 +534,7 @@ def _resolve_model_config(config: dict) -> dict:
         "max_tokens": int(base.get("max_tokens", 4096)),
         "max_turns":  int(base.get("max_turns", 10)),
         "timeout":    int(base.get("timeout", 240)),
+        "stream":     raw_stream is True or str(raw_stream).lower() == "true",
     }
 
 
@@ -842,6 +845,34 @@ def _format_tool_results(calls: list[ToolCall], results: list[str]) -> str:
 # API call
 # ---------------------------------------------------------------------------
 
+def _make_request(
+    endpoint: str,
+    api_key: str,
+    body: dict,
+    timeout: int,
+) -> urllib.request.Request:
+    """Build an authenticated HTTP Request object for the chat completions endpoint.
+
+    Parameters:
+        endpoint (str): Full URL of the chat completions endpoint.
+        api_key (str):  Bearer token (empty string for unauthenticated local servers).
+        body (dict):    JSON-serialisable request body.
+        timeout (int):  Not used here; callers pass it to urlopen.
+
+    Returns:
+        urllib.request.Request: Ready-to-open request object.
+    """
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return urllib.request.Request(
+        endpoint,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+
+
 def _api_request(
     endpoint: str,
     api_key: str,
@@ -849,8 +880,14 @@ def _api_request(
     messages: list[dict],
     max_tokens: int,
     timeout: int,
+    stream: bool = False,
 ) -> dict:
-    """Send one chat-completion request and return the parsed JSON response.
+    """Send one chat-completion request and return a normalised response dict.
+
+    When ``stream=False`` (default), sends a standard JSON request and reads
+    the full response body.  When ``stream=True``, requests an SSE stream and
+    assembles the content from chunks, keeping the socket alive during any
+    internal model thinking phase (important for qwen3, deepseek-r1, etc.).
 
     Parameters:
         endpoint (str):        Full URL of the chat completions endpoint.
@@ -858,40 +895,105 @@ def _api_request(
         model (str):           Model identifier.
         messages (list[dict]): Full conversation history.
         max_tokens (int):      Maximum tokens to generate.
-        timeout (int):         Socket timeout in seconds. Use a high value
-                               (240+) for local models on consumer hardware.
+        timeout (int):         Socket timeout in seconds. In streaming mode this
+                               is the per-chunk idle timeout, not the total
+                               response time, so the connection survives long
+                               thinking phases as long as tokens keep arriving.
+        stream (bool):         If True, request an SSE stream.
 
     Returns:
-        dict: Parsed API response body.
+        dict: Normalised response with shape
+              ``{"choices": [{"message": {"content": str}}]}``.
 
     Raises:
         SystemExit(1): On HTTP error, network failure, or malformed response.
+
+    Example usage:
+        resp = _api_request(endpoint, key, model, msgs, 4096, 240, stream=True)
+        content = resp["choices"][0]["message"]["content"]
     """
-    payload = json.dumps({
-        "model":      model,
-        "messages":   messages,
-        "max_tokens": max_tokens,
+    body = {
+        "model":       model,
+        "messages":    messages,
+        "max_tokens":  max_tokens,
         "temperature": 0,
-    }).encode("utf-8")
+    }
+    if stream:
+        body["stream"] = True
 
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    req = _make_request(endpoint, api_key, body, timeout)
 
-    req = urllib.request.Request(
-        endpoint, data=payload, headers=headers, method="POST"
-    )
+    try:
+        if stream:
+            content = _read_sse_stream(req, timeout)
+        else:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                content = json.loads(resp.read())["choices"][0]["message"]["content"] or ""
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        _fatal(f"API error {exc.code}: {body_text}")
+    except urllib.error.URLError as exc:
+        _fatal(f"Network error reaching {endpoint}: {exc.reason}")
+    except (KeyError, IndexError, json.JSONDecodeError) as exc:
+        _fatal(f"Unexpected API response structure: {exc}")
+
+    # Normalise to the same shape callers expect
+    return {"choices": [{"message": {"content": content}}]}
+
+
+def _read_sse_stream(req: urllib.request.Request, timeout: int) -> str:
+    """Read a Server-Sent Events stream and assemble the full content string.
+
+    Parses ``data: <json>`` lines from an OpenAI-compatible SSE response,
+    accumulating ``choices[0].delta.content`` from each chunk until the
+    server sends ``data: [DONE]``.
+
+    The per-read ``timeout`` is passed to ``urlopen``. Because the server
+    emits a new SSE chunk for each generated token (including thinking tokens),
+    the idle timer resets on every chunk, keeping the connection alive for
+    the entire generation — however long the model's reasoning phase takes.
+
+    Parameters:
+        req (urllib.request.Request): Prepared streaming HTTP request.
+        timeout (int):               Per-chunk socket idle timeout in seconds.
+
+    Returns:
+        str: Fully assembled content string.
+
+    Raises:
+        SystemExit(1): On HTTP errors, network failures, or malformed chunks.
+    """
+    parts: list[str] = []
 
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+
+                if not line.startswith("data: "):
+                    continue
+
+                payload = line[6:]  # strip "data: " prefix
+
+                if payload == "[DONE]":
+                    break
+
+                try:
+                    chunk = json.loads(payload)
+                    delta = chunk["choices"][0]["delta"]
+                    token = delta.get("content") or ""
+                    parts.append(token)
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    # Malformed chunk — skip silently (common with thinking tokens)
+                    continue
+
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         _fatal(f"API error {exc.code}: {body}")
     except urllib.error.URLError as exc:
-        _fatal(f"Network error reaching {endpoint}: {exc.reason}")
-    except json.JSONDecodeError as exc:
-        _fatal(f"Malformed JSON in API response: {exc}")
+        _fatal(f"Network error reaching stream: {exc.reason}")
+
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -907,6 +1009,7 @@ def _run_executor(
     max_tokens: int,
     max_turns: int,
     timeout: int,
+    stream: bool,
     project_root: pathlib.Path,
 ) -> str:
     """Run the executor model in an agentic loop, handling tool calls.
@@ -925,6 +1028,7 @@ def _run_executor(
         max_tokens (int):      Maximum tokens per API call.
         max_turns (int):       Maximum conversation turns before aborting.
         timeout (int):         Socket timeout per API call in seconds.
+        stream (bool):         Use SSE streaming (recommended for thinking models).
         project_root (pathlib.Path): Project root for tool file access.
 
     Returns:
@@ -942,7 +1046,7 @@ def _run_executor(
     call_cache: dict[tuple, str] = {}
 
     for turn in range(1, max_turns + 1):
-        response = _api_request(endpoint, api_key, model, messages, max_tokens, timeout)
+        response = _api_request(endpoint, api_key, model, messages, max_tokens, timeout, stream)
 
         try:
             content = response["choices"][0]["message"]["content"] or ""
@@ -1048,6 +1152,7 @@ def main() -> None:
         max_tokens      = model_cfg["max_tokens"],
         max_turns       = model_cfg["max_turns"],
         timeout         = model_cfg["timeout"],
+        stream          = model_cfg["stream"],
         project_root    = project_root,
     )
 

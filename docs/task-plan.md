@@ -187,3 +187,92 @@ Tasks are ordered by impact-to-effort ratio: highest-impact/lowest-effort first.
   - All three rules are present in `planner-prompt.md` under a `## Planner Rules` or
     `## Slice Design Rules` heading
   - The existing rules are preserved and numbered consistently
+
+### Phase 5: Trailing comma precision and thinking-model timeout (ISS-007, ISS-008)
+
+Evidence source: `docs/slice-execution-report-v2.md` (2026-03-08 second test run).
+
+---
+
+- [x] TASK-010: Add Rule 14 to `planner-prompt.md` — exact code in context for format-sensitive output [ISS-007]
+
+  **Root cause**: When the `context` field describes a CSV format using a mix of rows with
+  and without trailing commas (e.g. `centroid,{cx},{cy}` vs `cov_xx,{v},`), the executor
+  generalises the comma pattern to all rows. This is a plausible inference that happens to
+  be wrong. Showing exact code eliminates the ambiguity entirely.
+
+  **Changes to `planner-prompt.md`**:
+  - Add Rule 14 under the existing numbered rules:
+    > "When the `context` field specifies an output format where specific characters
+    > (trailing commas, quotes, delimiters) differ between row or field types, show the
+    > **exact code** that writes each row — not an abstract placeholder pattern.
+    > For Rust: use literal `writeln!` calls. For Python: use literal f-strings or
+    > `csv.writer` calls. Never use placeholder notation like `{cx},{cy}` when the
+    > executor must infer surrounding punctuation — spell out the complete format string
+    > verbatim. Example:
+    >
+    > **Wrong** (ambiguous): `centroid,{cx},{cy}` / `cov_xx,{v},`
+    >
+    > **Right** (unambiguous):
+    > ```
+    > writeln!(file, "centroid,{},{}", centroid.0, centroid.1)?;
+    > writeln!(file, "cov_xx,{},", cov[0][0])?;
+    > ```"
+
+  **Acceptance**:
+  - Rule 14 present in `planner-prompt.md`
+  - The rule includes a concrete right/wrong example pair
+
+---
+
+- [x] TASK-011: Streaming API mode in `slicer.py` to survive thinking-model latency [ISS-008]
+
+  **Root cause**: `urllib.request.urlopen(req, timeout=N)` applies `N` as the socket *idle*
+  timeout — how long to wait between successive bytes. Thinking models (e.g. qwen3-coder-next)
+  generate a long internal chain-of-thought before emitting the first visible token. During
+  this phase the server connection is open but silent, triggering a socket timeout even though
+  the model will eventually respond correctly.
+
+  With streaming (`stream: true`), the server sends Server-Sent Events (SSE) as it generates
+  each token — including thinking tokens. Each SSE chunk resets the idle timer, so the
+  connection survives arbitrarily long thinking phases.
+
+  **Changes to `slicer.py`**:
+
+  1. Add `"stream": bool(base.get("stream", False))` to `_resolve_model_config`.
+     Update `_CONFIG_HELP` to show `stream = true` (recommended for local thinking models).
+
+  2. Add `_api_request_stream(endpoint, api_key, model, messages, max_tokens, timeout) -> str`:
+     - Sets `"stream": true` in the JSON request body
+     - Opens the HTTP response with `urllib.request.urlopen(req, timeout=timeout)`
+       (timeout now applies per-chunk, not to total response time)
+     - Reads response line-by-line; lines starting with `data: ` are parsed as JSON
+     - Accumulates `choices[0]["delta"]["content"]` from each non-`[DONE]` chunk
+     - Returns the fully assembled content string
+
+  3. Add `stream: bool` parameter to `_api_request`; dispatch to `_api_request_stream`
+     when `stream=True`, otherwise use the existing single-request path.
+
+  4. Thread `stream=model_cfg["stream"]` through `_run_executor` → `_api_request`.
+
+  **Acceptance**:
+  - `python -m py_compile slicer.py` exits 0
+  - Setting `stream = true` in config causes `"stream": true` in the request body
+  - Non-streaming path (`stream = false`, the default) is unchanged in behaviour
+  - A mock SSE response with multiple `data:` chunks is correctly assembled into one string
+
+### Phase 6: Import style disambiguation (ISS-009)
+
+Evidence source: `docs/slice-execution-report-v3.md` (2026-03-08, Python run).
+
+- [x] TASK-012: Add Rule 15 to `planner-prompt.md` � import style for wiring slices [ISS-009]
+
+  **Root cause**: The executor defaulted to `from . import parser, stats, writer`
+  (relative package imports) because the context did not specify the import style.
+  Relative imports fail for flat directory layouts run as `python script.py`.
+
+  **Fix**: Rule 15 requires the context of any wiring slice to explicitly state
+  whether to use flat imports (`import x`) for same-directory modules or relative
+  imports (`from . import x`) for package-structured code.
+
+  **Acceptance**: Rule 15 present in `planner-prompt.md` with both flat/package examples.
