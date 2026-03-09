@@ -6,7 +6,7 @@ A suite of Claude Code plugins that provide a structured virtual development tea
 
 | Plugin | Role | Key skills |
 |---|---|---|
-| `devteam-workflow` | Pipeline orchestration | `requirements`, `plan`, `session-start` |
+| `devteam-workflow` | Pipeline orchestration | `requirements`, `plan`, `session-start`, `task-slicer` |
 | `devteam-architect` | Design and architecture | `design-session`, `adr`, `design-review` |
 | `devteam-researcher` | Research and validation | `api-research`, `library-check`, `codebase-explore` |
 | `devteam-implementer` | Standards-enforcing coding | `implement`, `pattern-check` |
@@ -159,7 +159,23 @@ Once a library is chosen, research its version lines. Presents current stable, L
 
 Maps entry points, patterns, conventions, and integration points in an unfamiliar area of the codebase. Run before implementing in an area you haven't worked in before.
 
-### 6. Implement
+### 6. Decompose a task into executor slices (optional)
+
+```
+/devteam-workflow:task-slicer [description of the implementation task]
+```
+
+Breaks a scoped implementation request into small, independently executable slices and optionally sends each slice to a weaker executor model via an OpenAI-compatible API. Useful when you want to delegate implementation to a local model (e.g. a quantised coding model running in LM Studio) while Claude acts as the planner and reviewer.
+
+The skill:
+- Computes a content hash of the request so identical tasks reuse an existing plan
+- Saves each plan to `.claude/task-slices/` as a JSON file
+- Applies the executor's file output itself (the executor model does not write to disk)
+- Verifies acceptance criteria after each slice before proceeding to dependent slices
+
+Requires `.claude/planner_config.toml` in the active project — see [Executor configuration](#executor-configuration).
+
+### 7. Implement
 
 ```
 /devteam-implementer:implement [task ID or description]
@@ -167,7 +183,7 @@ Maps entry points, patterns, conventions, and integration points in an unfamilia
 
 Reads requirements, task plan, and existing patterns first. Proposes an approach and waits for confirmation before writing any code. Writes tests as part of implementation.
 
-### 7. Test
+### 8. Test
 
 ```
 /devteam-tester:write-tests [file or module]
@@ -187,7 +203,7 @@ Runs the test suite in an isolated fork and returns only failures with context. 
 
 Identifies untested source files and functions. Tries to run the project's coverage tool; falls back to static analysis.
 
-### 8. Review before merging
+### 9. Review before merging
 
 ```
 /devteam-reviewer:code-review
@@ -219,9 +235,34 @@ Verifies the implementation satisfies the documented requirements and acceptance
 | `requirements` | `/devteam-workflow:requirements [topic]` | Elicit and document technology-agnostic requirements |
 | `plan` | `/devteam-workflow:plan` | Create or update the task plan from requirements |
 | `retrofit` | `/devteam-workflow:retrofit` | Analyse an existing codebase and produce requirements, ADRs, and a task plan |
+| `task-slicer` | `/devteam-workflow:task-slicer [task]` | Decompose a task into executor slices; optionally delegate implementation to a local model |
 | `task-status` | *(model-invoked)* | Silent background check; flags when work drifts from the plan |
 
 **Project files managed**: `docs/requirements.md`, `docs/task-plan.md`
+
+---
+
+### Executor configuration
+
+`task-slicer` requires a configuration file at `.claude/planner_config.toml` in the active project:
+
+```toml
+[model]
+endpoint   = "http://localhost:1234/v1"   # OpenAI-compatible endpoint
+api_key    = ""                            # leave empty for local servers
+name       = "your-model-name"
+max_tokens = 4096
+max_slices = 8
+max_turns  = 10
+timeout    = 1200   # seconds per API call; 1200 recommended for local thinking models
+stream     = false  # set true for thinking models (qwen3, deepseek-r1, etc.)
+```
+
+`endpoint` accepts either a full chat completions URL (`/v1/chat/completions`) or a base URL (`/v1`) — the skill appends the path automatically.
+
+`stream = true` uses Server-Sent Events rather than a single blocking request. This keeps the TCP connection alive during any internal chain-of-thought phase, preventing socket timeouts on thinking models.
+
+The executor model receives one slice at a time. It outputs file contents in `=== FILE: path === ... === END FILE ===` blocks; Claude writes each file and verifies the acceptance criteria before proceeding to the next slice.
 
 ---
 
@@ -306,6 +347,11 @@ docs/
 │   └── 0002-title.md
 └── design/
     └── topic.md           # Design notes produced by devteam-architect:design-session
+
+.claude/
+├── planner_config.toml    # Executor model config for task-slicer (not committed — see below)
+└── task-slices/
+    └── <hash>-<slug>.json # Saved slice plans, keyed by content hash of the task description
 ```
 
 None of these files need to exist before you start — each skill creates them on first use.
@@ -318,5 +364,8 @@ The following are gitignored and never committed:
 
 - `.claude/settings.local.json` — machine-specific Claude Code settings
 - `.claude/agent-memory-local/` — per-developer agent memory for `architect-reviewer`, `code-reviewer`, and `security-reviewer`
+- `.claude/planner_config.toml` — executor model endpoint and API key for `task-slicer`; contains credentials and is machine-specific
 
 Each developer's review agents build up their own independent knowledge of the codebase over time.
+
+The `.claude/task-slices/` directory can optionally be committed — the saved slice plans are content-addressed by a hash of the task description and contain no credentials. Committing them lets the team reuse slice plans across machines.
