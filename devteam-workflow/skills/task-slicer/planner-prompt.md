@@ -93,6 +93,27 @@ Do NOT attempt to verify read-only or conversational results with syntax checks 
     Always include one of these notes in the context of any wiring slice that
     imports from sibling modules.
 
+16. **Trivial operations must use `"method": "direct"`**: Do NOT send work to the executor
+    model if it can be expressed as a single shell command. Mark these slices with
+    `"method": "direct"` and provide the exact shell command(s) in `direct_instructions`.
+
+    Operations that qualify as direct:
+    - File or directory rename/move: `git mv old.py new.py`
+    - Global symbol rename across files: `find . -name "*.py" -exec sed -i 's/OldName/NewName/g' {} +`
+    - File deletion: `rm path/to/file`
+    - Adding or removing a single import line (trivial text substitution)
+    - Changing a single constant or configuration value in one place
+
+    Operations that do NOT qualify (must use executor):
+    - Any change requiring understanding of code logic
+    - Adding or modifying a function body
+    - Adapting call sites after an interface change
+    - Writing tests
+
+    Use `"method": "executor"` (the default) for all non-trivial slices. Omitting `method`
+    is equivalent to `"executor"`. Never send trivial work to the executor — it wastes model
+    capacity and introduces unnecessary risk of logic errors in simple changes.
+
 ### File tree rules
 1. Only include files that exist in the provided file tree.
 2. If creating a new file, explicitly state it is new in the context field.
@@ -120,6 +141,7 @@ Respond with ONLY a JSON object (no markdown, no explanation outside the JSON):
     {{
       "id": "slice_001",
       "description": "Imperative description of what to do",
+      "method": "executor",
       "acceptance_criteria": [
         "Criterion that can be checked deterministically"
       ],
@@ -127,7 +149,8 @@ Respond with ONLY a JSON object (no markdown, no explanation outside the JSON):
       "context_files": [],
       "risk_level": "low",
       "depends_on": [],
-      "context": "Any relevant code snippets or interface details. For integration slices, include the complete public signatures of all functions this slice will call."
+      "context": "Any relevant code snippets or interface details. For integration slices, include the complete public signatures of all functions this slice will call.",
+      "direct_instructions": null
     }}
   ],
   "global_acceptance_criteria": [

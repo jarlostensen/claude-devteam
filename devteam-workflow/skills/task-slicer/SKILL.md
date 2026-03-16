@@ -108,7 +108,17 @@ If config is **MISSING** or the script is **NOT FOUND**, display the plan only a
 
 ## Step 4a — Execute each slice
 
-For each selected slice (in dependency order):
+For each selected slice (in dependency order), check the slice's `method` field:
+
+### If `method` is `"direct"` (or `direct_instructions` is present and non-null)
+
+Run the command(s) in `direct_instructions` yourself using your **Bash** tool. Do not invoke the executor model. Confirm the action with a note such as: `"Direct: <command>"`.
+
+Then proceed directly to Step 4c (acceptance criteria). Skip Steps 4b entirely for this slice.
+
+### If `method` is `"executor"` (or `method` is absent)
+
+**CRITICAL: Do not implement this slice yourself.** Even if you can see what the code should look like, you must not write or edit source files for executor slices. Your role for these slices is to dispatch to the executor, apply its output, and verify — nothing more. Implementing it yourself defeats the purpose of the executor and wastes the time already spent waiting for it to respond.
 
 1. **Write the slice JSON to a temp file** — use your **Write** tool to save the slice's JSON object to `.claude/task-slices/current-slice.json` in the project root. This avoids shell quoting issues (dollar signs, backslashes, and braces in the JSON context would be corrupted if passed as a bash argument).
 
@@ -132,7 +142,16 @@ For every `=== FILE: <path> === ... === END FILE ===` block in the stdout:
 2. **Write the file** — use your **Write** tool with the exact path from the FILE header and the exact content between the markers. Do not add, remove, or alter any characters.
 3. **Confirm** — after writing, note: `"Written: <path>"`.
 
-If the executor output contains no FILE blocks (e.g. a timeout or error message), do not write anything. Show the raw output to the user and ask how to proceed.
+If the executor output contains no FILE blocks (e.g. a timeout or error message), do not write anything. Instead, ask the user:
+
+> "The executor produced no output for **{slice.id}** ({slice.description}). It may have timed out or stalled.
+>
+> - **Take over** — I'll implement this slice myself, then hand the next slice back to the executor
+> - **Retry** — run the executor again for this slice
+> - **Skip** — mark this slice as skipped and continue to the next
+> - **Stop** — halt execution here"
+
+If the user chooses **Take over**: implement only this slice yourself (write/edit the target files), then proceed to Step 4c to verify acceptance criteria. After this slice passes, **return to the executor** for the next slice — do not continue implementing subsequent slices yourself.
 
 ---
 
