@@ -108,10 +108,14 @@ If config is **MISSING** or the script is **NOT FOUND**, display the plan only a
 
 ## Step 4a — Execute each slice
 
-For each selected slice (in dependency order), use your **Bash** tool to run:
+For each selected slice (in dependency order):
+
+1. **Write the slice JSON to a temp file** — use your **Write** tool to save the slice's JSON object to `.claude/task-slices/current-slice.json` in the project root. This avoids shell quoting issues (dollar signs, backslashes, and braces in the JSON context would be corrupted if passed as a bash argument).
+
+2. **Run the executor** — use your **Bash** tool:
 
 ```
-python "<executor script path>" "<slice JSON as single-line string>" "<current working directory>"
+python "<executor script path>" "@<project root>/.claude/task-slices/current-slice.json" "<current working directory>"
 ```
 
 Capture the full stdout. If the process exits non-zero, show the error output and stop — do not proceed to dependent slices.

@@ -1122,11 +1122,25 @@ def _fatal(message: str) -> None:
 def main() -> None:
     """Parse arguments, load config, run the executor loop, print the result."""
     if len(sys.argv) < 2:
-        print("Usage: slicer.py <slice_json> [project_root]", file=sys.stderr)
+        print("Usage: slicer.py <slice_json|@filepath> [project_root]", file=sys.stderr)
         sys.exit(1)
 
+    raw_arg = sys.argv[1]
+    if raw_arg.startswith("@"):
+        # @filepath convention: read JSON from file to avoid shell quoting issues
+        json_path = pathlib.Path(raw_arg[1:])
+        if not json_path.is_absolute():
+            # resolve relative to cwd, not project_root (not yet parsed)
+            json_path = pathlib.Path(os.getcwd()) / json_path
+        try:
+            slice_json = json_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _fatal(f"Cannot read slice file {json_path}: {exc}")
+    else:
+        slice_json = raw_arg
+
     try:
-        slice_data = json.loads(sys.argv[1])
+        slice_data = json.loads(slice_json)
     except json.JSONDecodeError as exc:
         _fatal(f"Invalid slice JSON: {exc}")
 
