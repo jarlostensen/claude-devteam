@@ -7,7 +7,7 @@ A suite of Claude Code plugins that provide a structured virtual development tea
 | Plugin | Role | Key skills |
 |---|---|---|
 | `devteam-workflow` | Pipeline orchestration | `requirements`, `plan`, `session-start`, `task-slicer` |
-| `devteam-architect` | Design and architecture | `design-session`, `adr`, `design-review` |
+| `devteam-architect` | Design and architecture | `design-session`, `adr`, `layer-review`, `design-review` |
 | `devteam-researcher` | Research and validation | `api-research`, `library-check`, `codebase-explore` |
 | `devteam-implementer` | Standards-enforcing coding | `implement`, `pattern-check` |
 | `devteam-tester` | Testing | `write-tests`, `run-tests`, `coverage-check` |
@@ -134,10 +134,18 @@ Facilitates a structured options-and-tradeoffs discussion. Produces a design not
 Formalises the decision as a MADR-format Architecture Decision Record in `docs/adr/`.
 
 ```
-/devteam-architect:design-review
+/devteam-architect:layer-review [doc path]
+```
+
+Spawns three domain-specialist agents in parallel — C++/client, cloud/infrastructure, and AI/ML — each reviewing the design from a single-domain perspective. After collecting all three reports, produces a synthesis that highlights **cross-layer conflicts**: mismatches between layers that no single-domain reviewer can catch (e.g. C++ assumes synchronous calls; cloud layer requires async messaging). Skips layers the design does not touch. Run this for any design that spans more than one technical domain, before the full architectural critique.
+
+```
+/devteam-architect:design-review [doc path]
 ```
 
 Forks an independent `architect-reviewer` agent (Claude Opus with web access) to critique the design against requirements. Returns a structured report with requirements coverage, KISS compliance, ADR consistency, and risk assessment. Run this before marking any ADR as `accepted`.
+
+The recommended order for non-trivial cross-domain designs is: `design-session` → `adr` → `layer-review` → `design-review`.
 
 ### 5. Research dependencies
 
@@ -272,11 +280,19 @@ The executor model receives one slice at a time. It outputs file contents in `==
 |---|---|---|
 | `design-session` | `/devteam-architect:design-session [topic]` | Structured design discussion with options and tradeoffs |
 | `adr` | `/devteam-architect:adr [title]` | Generate a MADR-format Architecture Decision Record |
-| `design-review` | `/devteam-architect:design-review [doc path]` | Independent design critique via forked architect-reviewer agent |
+| `layer-review` | `/devteam-architect:layer-review [doc path]` | Parallel domain-specialist review across C++/client, cloud, and AI/ML layers |
+| `design-review` | `/devteam-architect:design-review [doc path]` | Independent holistic critique via forked architect-reviewer agent |
 
 **Project files managed**: `docs/design/`, `docs/adr/`
 
-**Agent**: `architect-reviewer` — Claude Opus with web access and local memory. Critiques designs independently with no access to the main conversation. Accumulates codebase knowledge across sessions.
+**Agents**:
+
+- `architect-reviewer` — Claude Opus with web access and local memory. Holistic architectural critique with no access to the main conversation. Accumulates codebase knowledge across sessions.
+- `cpp-specialist` — Claude Sonnet. Reviews designs for C++ and native client-side concerns: API/ABI contracts, memory ownership, threading model, performance on hot paths, and build system implications.
+- `cloud-specialist` — Claude Sonnet. Reviews designs for cloud and infrastructure concerns: service topology, failure modes, scalability, state management, observability, security boundaries, and deployment strategy.
+- `ai-specialist` — Claude Sonnet. Reviews designs for AI/ML concerns: inference serving architecture, model lifecycle, evaluation pipeline, data pipeline and feedback loops, compute requirements, and production drift monitoring.
+
+The three specialist agents are spawned in parallel by `layer-review` and review the design in isolation from each other. Their findings are then synthesised to surface cross-layer conflicts before the holistic `design-review` pass.
 
 ---
 
