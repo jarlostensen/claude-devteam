@@ -1,6 +1,7 @@
 # Claude Code — local-only files
 # settings.local.json holds machine-specific Claude Code configuration
 .claude/settings.local.json
+.claude/planner_config.toml
 
 # Agent memory (memory: local) — each developer builds their own
 # Covers: architect-reviewer, code-reviewer, security-reviewer
