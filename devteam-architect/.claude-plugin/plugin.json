@@ -1,7 +1,7 @@
 {
   "name": "devteam-architect",
   "version": "0.1.0",
-  "description": "Design sessions, ADRs (MADR format), and independent design critique via a forked architect-reviewer agent",
+  "description": "Design sessions, ADRs (MADR format), independent design critique, and parallel domain-specialist layer review across C++/client, cloud, and AI/ML",
   "author": {
     "name": "Dev Team"
   }

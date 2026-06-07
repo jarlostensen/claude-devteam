@@ -10,6 +10,9 @@
 .claude/projects/
 .claude/todos/
 
+# Generated task slice plans (keyed by content hash — local to each run)
+.claude/task-slices/
+
 # Python
 __pycache__/
 *.pyc
