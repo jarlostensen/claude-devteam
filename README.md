@@ -11,7 +11,7 @@ A suite of Claude Code plugins that provide a structured virtual development tea
 | `devteam-researcher` | Research and validation | `api-research`, `library-check`, `codebase-explore` |
 | `devteam-implementer` | Standards-enforcing coding | `implement`, `pattern-check` |
 | `devteam-tester` | Testing | `write-tests`, `run-tests`, `coverage-check` |
-| `devteam-reviewer` | Independent review | `code-review`, `security-review`, `requirements-check` |
+| `devteam-reviewer` | Independent review | `code-review`, `security-review`, `requirements-check`, `check-assumptions` |
 
 ## Core principles enforced by the suite
 
@@ -231,6 +231,12 @@ Forks an independent `security-reviewer` agent to check against the OWASP Top 10
 
 Verifies the implementation satisfies the documented requirements and acceptance criteria before the task is marked complete.
 
+```
+/devteam-reviewer:check-assumptions [FR-001 NFR-003 ...]
+```
+
+Audits whether each documented requirement is still valid. Spawns one independent analysis agent per requirement in parallel; each searches docs, code, ADRs, task plan, and git history and returns a verdict of **ok**, **doubt**, or **invalid/contradicted**. Run when requirements may have drifted from reality — after a significant refactor, before a planning cycle, or when implementation diverges from the spec. Leave the argument blank to check all requirements, or pass specific IDs to focus the audit.
+
 ---
 
 ## Plugin reference
@@ -341,6 +347,7 @@ The three specialist agents are spawned in parallel by `layer-review` and review
 | `code-review` | `/devteam-reviewer:code-review` | Quality, correctness, and standards review of recent changes |
 | `security-review` | `/devteam-reviewer:security-review` | OWASP Top 10 check, secrets scan, attack surface assessment |
 | `requirements-check` | `/devteam-reviewer:requirements-check [task]` | Verify implementation satisfies requirements and acceptance criteria |
+| `check-assumptions` | `/devteam-reviewer:check-assumptions [IDs]` | Audit whether each requirement is still valid; flags ok / doubt / invalid/contradicted |
 
 **Agents**:
 - `code-reviewer` — Claude Opus with local memory; accumulates codebase knowledge across sessions
