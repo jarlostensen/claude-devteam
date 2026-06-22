@@ -11,7 +11,7 @@ A suite of Claude Code plugins that provide a structured virtual development tea
 | `devteam-researcher` | Research and validation | `api-research`, `library-check`, `codebase-explore` |
 | `devteam-implementer` | Standards-enforcing coding | `implement`, `pattern-check` |
 | `devteam-tester` | Testing | `write-tests`, `run-tests`, `coverage-check` |
-| `devteam-reviewer` | Independent review | `code-review`, `security-review`, `requirements-check`, `check-assumptions` |
+| `devteam-reviewer` | Independent review | `code-review`, `lang-review`, `security-review`, `requirements-check`, `check-assumptions` |
 
 ## Core principles enforced by the suite
 
@@ -220,6 +220,12 @@ Identifies untested source files and functions. Tries to run the project's cover
 Forks an independent `code-reviewer` agent to review recent changes for correctness, standards adherence, documentation, and test coverage.
 
 ```
+/devteam-reviewer:lang-review [commit range or file paths]
+```
+
+Deep language-specialist review for codebases that mix Go and Python. Detects which languages are present in the diff, then spawns a `go-specialist` and/or `python-specialist` in parallel alongside the general `code-reviewer`. After collecting all three reports, synthesises findings and flags **cross-language issues** — serialisation contract mismatches, null/None divergence, error representation inconsistencies, and async boundary assumptions that no single-language reviewer can see. Use this instead of `code-review` when a change touches Go and Python code that interact at a boundary.
+
+```
 /devteam-reviewer:security-review
 ```
 
@@ -345,6 +351,7 @@ The three specialist agents are spawned in parallel by `layer-review` and review
 | Skill | Invocation | Description |
 |---|---|---|
 | `code-review` | `/devteam-reviewer:code-review` | Quality, correctness, and standards review of recent changes |
+| `lang-review` | `/devteam-reviewer:lang-review [scope]` | Parallel Go + Python specialist review with cross-language conflict synthesis |
 | `security-review` | `/devteam-reviewer:security-review` | OWASP Top 10 check, secrets scan, attack surface assessment |
 | `requirements-check` | `/devteam-reviewer:requirements-check [task]` | Verify implementation satisfies requirements and acceptance criteria |
 | `check-assumptions` | `/devteam-reviewer:check-assumptions [IDs]` | Audit whether each requirement is still valid; flags ok / doubt / invalid/contradicted |
@@ -352,8 +359,10 @@ The three specialist agents are spawned in parallel by `layer-review` and review
 **Agents**:
 - `code-reviewer` — Claude Opus with local memory; accumulates codebase knowledge across sessions
 - `security-reviewer` — Claude Opus with local memory; tracks vulnerability patterns in this codebase
+- `go-specialist` — Claude Sonnet; Go-specific review: concurrency safety, context propagation, error wrapping, interface design, module hygiene
+- `python-specialist` — Claude Sonnet; Python-specific review: type annotations, async correctness, exception chaining, resource management, packaging
 
-Both reviewer agents run in isolation from the main conversation. Only their structured reports are returned.
+`code-review` and both specialist agents run in isolation from the main conversation. `lang-review` orchestrates specialists in parallel and returns a synthesised report.
 
 ---
 
