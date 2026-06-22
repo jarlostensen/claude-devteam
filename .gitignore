@@ -30,3 +30,6 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# Local stuff
+localdev/

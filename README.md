@@ -6,7 +6,7 @@ A suite of Claude Code plugins that provide a structured virtual development tea
 
 | Plugin | Role | Key skills |
 |---|---|---|
-| `devteam-workflow` | Pipeline orchestration | `requirements`, `plan`, `session-start`, `task-slicer` |
+| `devteam-workflow` | Pipeline orchestration | `requirements`, `plan`, `session-start`, `task-slicer`, `autobuilder` |
 | `devteam-architect` | Design and architecture | `design-session`, `adr`, `layer-review`, `design-review` |
 | `devteam-researcher` | Research and validation | `api-research`, `library-check`, `codebase-explore` |
 | `devteam-implementer` | Standards-enforcing coding | `implement`, `pattern-check` |
@@ -183,7 +183,19 @@ The skill:
 
 Requires `.claude/planner_config.toml` in the active project — see [Executor configuration](#executor-configuration).
 
-### 7. Implement
+### 7. Build a task end-to-end (optional)
+
+```
+/devteam-workflow:autobuilder [task ID or description]
+```
+
+Drives a single task through the full cycle — design, implementation, review, and commit — in one command. Pauses only for design decisions, approach confirmation, review findings, and branch disposition. All other steps run automatically.
+
+State is saved to `.claude/autobuilder/<slug>.json` so a run can be resumed if interrupted. Re-running the same command resumes from the last incomplete phase rather than restarting from scratch.
+
+Use `autobuilder` when you want the full workflow managed for you. Use the individual skills below when you need finer control over a specific phase.
+
+### 8. Implement (manual)
 
 ```
 /devteam-implementer:implement [task ID or description]
@@ -191,7 +203,7 @@ Requires `.claude/planner_config.toml` in the active project — see [Executor c
 
 Reads requirements, task plan, and existing patterns first. Proposes an approach and waits for confirmation before writing any code. Writes tests as part of implementation.
 
-### 8. Test
+### 9. Test
 
 ```
 /devteam-tester:write-tests [file or module]
@@ -211,7 +223,7 @@ Runs the test suite in an isolated fork and returns only failures with context. 
 
 Identifies untested source files and functions. Tries to run the project's coverage tool; falls back to static analysis.
 
-### 9. Review before merging
+### 10. Review before merging
 
 ```
 /devteam-reviewer:code-review
@@ -256,6 +268,7 @@ Audits whether each documented requirement is still valid. Spawns one independen
 | `plan` | `/devteam-workflow:plan` | Create or update the task plan from requirements |
 | `retrofit` | `/devteam-workflow:retrofit` | Analyse an existing codebase and produce requirements, ADRs, and a task plan |
 | `task-slicer` | `/devteam-workflow:task-slicer [task]` | Decompose a task into executor slices; optionally delegate implementation to a local model |
+| `autobuilder` | `/devteam-workflow:autobuilder [task]` | End-to-end orchestrator: design → implement → review → commit, with resumable state |
 | `task-status` | *(model-invoked)* | Silent background check; flags when work drifts from the plan |
 
 **Project files managed**: `docs/requirements.md`, `docs/task-plan.md`
@@ -382,8 +395,10 @@ docs/
 
 .claude/
 ├── planner_config.toml    # Executor model config for task-slicer (not committed — see below)
-└── task-slices/
-    └── <hash>-<slug>.json # Saved slice plans, keyed by content hash of the task description
+├── task-slices/
+│   └── <hash>-<slug>.json # Saved slice plans, keyed by content hash of the task description
+└── autobuilder/
+    └── <slug>.json        # Per-task autobuilder state: phase status, branch, commit, notes
 ```
 
 None of these files need to exist before you start — each skill creates them on first use.
